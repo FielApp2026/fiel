@@ -50,7 +50,7 @@ function setNav(items, active) {
   nav.classList.remove('hide');
   nav.innerHTML = items.map(([href, label, icon]) => `<button class="${href === active ? 'on' : ''}" data-go="${href}">${ic(icon, 22)}<span>${label}</span></button>`).join('');
 }
-const cedField = (id, val = '') => `<div class="pair"><select class="inp" id="${id}p" aria-label="Tipo de cédula"><option${val[0] === 'E' ? '' : ' selected'}>V</option><option${val[0] === 'E' ? ' selected' : ''}>E</option></select><input class="inp" id="${id}" inputmode="numeric" autocomplete="off" placeholder="24567890" maxlength="10" value="${val ? val.slice(1) : ''}"></div>`;
+const cedField = (id, val = '', ac = 'off') => `<div class="pair"><select class="inp" id="${id}p" aria-label="Tipo de cédula"><option${val[0] === 'E' ? '' : ' selected'}>V</option><option${val[0] === 'E' ? ' selected' : ''}>E</option></select><input class="inp" id="${id}" name="${ac === 'username' ? 'username' : id}" inputmode="numeric" autocomplete="${ac}" placeholder="24567890" maxlength="10" value="${val ? val.slice(1) : ''}"></div>`;
 const readCed = (id) => { const d = ($('#' + id)?.value || '').replace(/\D/g, ''); return d ? $('#' + id + 'p').value + d : ''; };
 const telField = (id) => `<div class="pair"><select class="inp" id="${id}p" aria-label="Operadora">${['0414', '0424', '0412', '0416', '0426', '0422'].map((p) => `<option>${p}</option>`).join('')}</select><input class="inp" id="${id}" inputmode="numeric" autocomplete="tel" placeholder="1234567" maxlength="8"></div>`;
 const readTel = (id) => { const d = ($('#' + id)?.value || '').replace(/\D/g, ''); return d ? $('#' + id + 'p').value + d : ''; };
@@ -75,7 +75,8 @@ const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/
 let bioOk = null;
 async function bioSupported() {
   if (bioOk !== null) return bioOk;
-  try { bioOk = !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch { bioOk = false; }
+  bioOk = !!(window.PublicKeyCredential && window.isSecureContext && navigator.credentials);
+  if (bioOk && !/iPhone|iPad|iPod|Android|Macintosh/.test(navigator.userAgent)) { try { bioOk = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); } catch { bioOk = false; } }
   return bioOk;
 }
 const bioInfo = () => lsGet(BKEY);
@@ -100,7 +101,7 @@ async function bioCheck() {
 function bioOff() { lsSet(BKEY, null); const l = lsGet(LKEY); lsSet(LKEY, null); return l; }
 // Guarda la sesión "bajo llave": solo se recupera con Face ID / huella.
 function bioLock() { if (session && bioInfo()) { lsSet(LKEY, session); saveSession(null); me = null; } try { sessionStorage.removeItem('fiel.unlocked'); } catch {} }
-const bioErr = (e) => e && (e.name === 'NotAllowedError' || e.name === 'AbortError') ? `No se confirmó con ${BIO}. Intenta otra vez o entra con tu contraseña.` : (e?.message || 'No se pudo usar ' + BIO + '.');
+const bioErr = (e) => e && e.name === 'NotSupportedError' ? `Este teléfono no permite usar ${BIO} aquí. Revisa que tenga ${BIO} activado en Ajustes del teléfono.` : e && (e.name === 'NotAllowedError' || e.name === 'AbortError') ? `No se confirmó con ${BIO}. Intenta otra vez o entra con tu contraseña.` : (e?.message || 'No se pudo usar ' + BIO + '.');
 
 async function refreshIfNeeded() {
   if (!session) return;
@@ -314,7 +315,7 @@ on(/^\/registro$/, async () => {
     <h1>Crea tu <em>cuenta</em></h1><p class="lead">Tu cédula y tu teléfono hacen que cada tarjeta sea solo tuya.</p>
     <form class="form" id="rf" novalidate>
       <label class="flabel" for="rn">Nombre y apellido</label><input class="inp" id="rn" autocomplete="name" placeholder="Daniel Herrera" maxlength="80">
-      <label class="flabel" for="rc">Cédula</label>${cedField('rc')}
+      <label class="flabel" for="rc">Cédula</label>${cedField('rc', '', 'username')}
       <label class="flabel" for="rt">Teléfono con WhatsApp</label>${telField('rt')}
       <label class="flabel" for="rp">Contraseña</label><input class="inp" id="rp" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres">
       <label class="flabel" for="rp2">Repite la contraseña</label><input class="inp" id="rp2" type="password" autocomplete="new-password" placeholder="Igual a la anterior">
@@ -355,13 +356,13 @@ on(/^\/entrar$/, async () => {
       <p class="small" style="margin-top:6px">${fmtCed(b.ced)} · <button class="linkbtn" style="padding:0" data-act="biowho">¿No eres tú?</button></p></div>
       <p class="small" style="text-align:center;margin:22px 0 4px">O entra con tu contraseña</p>` : '<p class="lead">Entra con tu cédula y tu contraseña.</p>'}
     <form class="form" id="lf" novalidate>
-      <label class="flabel" for="lc">Cédula</label>${cedField('lc')}
-      <label class="flabel" for="lp">Contraseña</label><input class="inp" id="lp" type="password" autocomplete="current-password" placeholder="Tu contraseña">
+      <label class="flabel" for="lc">Cédula</label>${cedField('lc', '', 'username')}
+      <label class="flabel" for="lp">Contraseña</label><input class="inp" id="lp" name="password" type="password" autocomplete="current-password" placeholder="Tu contraseña">
       <p class="err" id="lerr" role="alert"></p>
       <button class="primary" type="submit" id="lbtn">Entrar</button>
     </form>
     <p class="hint"><button class="linkbtn" data-act="forgot">¿Olvidaste tu contraseña?</button><br>¿No tienes cuenta? <a href="#/registro">Créala aquí</a></p>`;
-  if (locked) { $('#lc').value = b.ced.slice(1); const p = $('#lcp'); if (p) p.value = b.ced[0]; }
+  if (locked) { $('#lc').value = b.ced.slice(1); const p = $('#lcp'); if (p) p.value = b.ced[0]; if (!window.__bioAuto) { window.__bioAuto = 1; setTimeout(() => { window.__bioSilent = 1; $('[data-act="biounlock"]')?.click(); }, 350); } }
 });
 let fails = 0;
 async function submitLogin() {
@@ -380,6 +381,7 @@ on(/^\/cartera$/, async () => {
   clientNav('#/cartera'); loading();
   const u = await loadMe();
   if (!u) { location.hash = '#/entrar'; return; }
+  offerBio();
   const [cards, prizes] = await Promise.all([
     db.get('cards', `user_id=eq.${uid()}&select=stamps,last_visit_at,store_id,stores(id,name,slug,business_type,reward,needed,terms,design,verify_status)&order=last_visit_at.desc.nullslast`),
     db.get('rewards', `user_id=eq.${uid()}&status=eq.pendiente&select=code,reward,store_id,created_at,expires_at,stores(name)&order=created_at.desc`),
@@ -813,6 +815,7 @@ document.addEventListener('click', async (e) => {
     case 'biooff2': bioOff(); closeSheet(); toast(`${BIO} desactivado`); route(); break;
     case 'biowho': { const l = bioOff(); if (l?.refresh_token) { saveSession(l); try { await api('/auth/v1/logout', { method: 'POST' }); } catch {} saveSession(null); } route(); break; }
     case 'biounlock': {
+      if (!e.isTrusted && !window.__bioSilent) break;
       const er = $('#berr'); if (er) er.textContent = '';
       try {
         await bioCheck();
@@ -822,7 +825,8 @@ document.addEventListener('click', async (e) => {
         if (!session) { bioOff(); toast('Tu sesión venció. Entra con tu contraseña.'); route(); break; }
         try { sessionStorage.setItem('fiel.unlocked', '1'); } catch {}
         goNext();
-      } catch (err) { if (er) er.textContent = bioErr(err); else toast(bioErr(err)); }
+      } catch (err) { if (!window.__bioSilent) { if (er) er.textContent = bioErr(err); else toast(bioErr(err)); } }
+      window.__bioSilent = 0;
       break; }
     case 'forgot': openSheet(`<div class="bigicon">${ic('lock', 26)}</div><h2>¿Olvidaste tu <em>contraseña</em>?</h2><p>Escríbenos por WhatsApp desde el número de tu cuenta con tu cédula y te ayudamos a crear una nueva.</p><div class="btns"><a class="primary wa" target="_blank" rel="noopener" href="${waLink(C.support, 'Hola, olvidé mi contraseña de Fiel. Mi cédula es: ')}">${ic('msg', 18)} Escribir a soporte</a><button class="ghost" data-close>Cancelar</button></div>`); break;
     case 'prize': openSheet(`<div class="bigicon gold">${ic('gift', 26)}</div><h2>${esc(a.dataset.reward)}</h2><p>en ${esc(a.dataset.store)}</p><div class="bigcode">${a.dataset.code}</div><p class="small">Muéstralo en caja o escríbelo en tu pedido en línea. Vence el ${fmtDate(a.dataset.exp)}.</p><div class="btns"><button class="primary" data-close>Listo</button></div>`); break;
