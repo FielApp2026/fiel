@@ -1004,6 +1004,37 @@ document.addEventListener('change', async (e) => {
   if (['up-iso', 'up-wordm', 'upfont'].includes(e.target.id)) { await dzFile(e.target); e.target.value = ''; }
 });
 
-if (bioInfo() && session) { let u = null; try { u = sessionStorage.getItem('fiel.unlocked'); } catch {} if (!u) { const h = location.hash; bioLock(); if (h && !/^#\/(entrar|registro)?$/.test(h)) sessionStorage.setItem('fiel.next', h); location.hash = '#/entrar'; } }
+/* ---------- Bloqueo automático: más de 3 minutos fuera de la app ---------- */
+const AWAY_MS = 3 * 60 * 1000, HKEY = 'fiel.hiddenAt';
+const markAway = () => { try { if (session) localStorage.setItem(HKEY, String(Date.now())); } catch {} };
+function awayTooLong() { let t = 0; try { t = +localStorage.getItem(HKEY) || 0; localStorage.removeItem(HKEY); } catch {} return t > 0 && Date.now() - t > AWAY_MS; }
+function lockNow(reason) {
+  if (!session) return;
+  const h = location.hash;
+  closeSheet(); DZ = null;
+  if (bioInfo()) bioLock();
+  else { const old = session; saveSession(null); me = null; try { sessionStorage.removeItem('fiel.unlocked'); } catch {} fetch(`${C.supabaseUrl}/auth/v1/logout`, { method: 'POST', headers: { apikey: C.supabaseKey, Authorization: 'Bearer ' + old.access_token } }).catch(() => {}); }
+  if (h && !/^#\/(entrar|registro)?$/.test(h)) sessionStorage.setItem('fiel.next', h);
+  window.__bioAuto = 0;
+  if (reason) setTimeout(() => toast(reason), 300);
+  if (location.hash === '#/entrar') route(); else location.hash = '#/entrar';
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) markAway();
+  else if (awayTooLong()) lockNow('Por seguridad, Fiel se bloquea tras 3 minutos fuera de la app.');
+});
+window.addEventListener('pagehide', markAway);
+// Al abrir la app: si estuvo cerrada más de 3 minutos, o tiene Face ID y es una apertura nueva, se pide entrar de nuevo.
+{
+  const tooLong = awayTooLong();
+  let unlocked = null; try { unlocked = sessionStorage.getItem('fiel.unlocked'); } catch {}
+  if (session && (tooLong || (bioInfo() && !unlocked))) {
+    const h = location.hash;
+    if (bioInfo()) bioLock();
+    else { const old = session; saveSession(null); me = null; fetch(`${C.supabaseUrl}/auth/v1/logout`, { method: 'POST', headers: { apikey: C.supabaseKey, Authorization: 'Bearer ' + old.access_token } }).catch(() => {}); }
+    if (h && !/^#\/(entrar|registro)?$/.test(h)) sessionStorage.setItem('fiel.next', h);
+    location.hash = '#/entrar';
+  }
+}
 route();
 flushQueue();
