@@ -146,3 +146,6 @@ a.row,a.item,a.ghost,a.primary,a.iconbtn{text-decoration:none;color:inherit}
 a.primary{color:#111214}
 .stack{height:auto;aspect-ratio:1.6/1.25;margin:22px 0 22px}
 .stack .card{width:86%}
+.bioBtn{display:grid;place-items:center;width:84px;height:84px;margin:4px auto 0;border-radius:24px;border:1px solid var(--line, rgba(255,255,255,.12));background:rgba(255,255,255,.04);color:var(--fg);cursor:pointer}
+.bioBtn:active{transform:scale(.96)}
+[hidden]{display:none!important}

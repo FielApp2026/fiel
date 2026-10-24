@@ -32,6 +32,7 @@ const P = {
   cog: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6"/>',
   out: '<path d="M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14"/><path d="M10 8l-4 4 4 4M6 12h10"/>',
   upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 15.5V19a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3.5"/>',
+  face: '<path d="M4 8V6.5A2.5 2.5 0 0 1 6.5 4H8M16 4h1.5A2.5 2.5 0 0 1 20 6.5V8M20 16v1.5a2.5 2.5 0 0 1-2.5 2.5H16M8 20H6.5A2.5 2.5 0 0 1 4 17.5V16"/><path d="M9 9.5v1M15 9.5v1M12 9.5v3.5h-1M9.5 16a3.5 3.5 0 0 0 5 0"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.2"/>',
 };
 const ic = (n, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
@@ -61,6 +62,45 @@ let session = null;
 try { session = JSON.parse(localStorage.getItem(SKEY) || 'null'); } catch { session = null; }
 const saveSession = (s) => { session = s; try { s ? localStorage.setItem(SKEY, JSON.stringify(s)) : localStorage.removeItem(SKEY); } catch {} };
 class NetErr extends Error {}
+
+/* ---------- Face ID / huella (WebAuthn del propio teléfono) ---------- */
+const BKEY = 'fiel.bio.v1', LKEY = 'fiel.locked.v1';
+const lsGet = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
+const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const isApple = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent);
+const BIO = isApple ? 'Face ID' : 'tu huella';
+const BIO_T = isApple ? 'Face ID o Touch ID' : 'huella o rostro';
+const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+let bioOk = null;
+async function bioSupported() {
+  if (bioOk !== null) return bioOk;
+  try { bioOk = !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch { bioOk = false; }
+  return bioOk;
+}
+const bioInfo = () => lsGet(BKEY);
+async function bioEnable(u) {
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: crypto.getRandomValues(new Uint8Array(32)),
+    rp: { name: 'Fiel', id: location.hostname },
+    user: { id: new TextEncoder().encode(u.id), name: fmtCed(u.cedula), displayName: u.full_name },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+    timeout: 60000, attestation: 'none' } });
+  lsSet(BKEY, { id: b64u(cred.rawId), uid: u.id, ced: u.cedula, name: u.full_name });
+  try { sessionStorage.setItem('fiel.unlocked', '1'); } catch {}
+}
+async function bioCheck() {
+  const b = bioInfo(); if (!b) throw new Error('Face ID no está activado.');
+  await navigator.credentials.get({ publicKey: {
+    challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname,
+    allowCredentials: [{ type: 'public-key', id: unb64u(b.id), transports: ['internal'] }],
+    userVerification: 'required', timeout: 60000 } });
+}
+function bioOff() { lsSet(BKEY, null); const l = lsGet(LKEY); lsSet(LKEY, null); return l; }
+// Guarda la sesión "bajo llave": solo se recupera con Face ID / huella.
+function bioLock() { if (session && bioInfo()) { lsSet(LKEY, session); saveSession(null); me = null; } try { sessionStorage.removeItem('fiel.unlocked'); } catch {} }
+const bioErr = (e) => e && (e.name === 'NotAllowedError' || e.name === 'AbortError') ? `No se confirmó con ${BIO}. Intenta otra vez o entra con tu contraseña.` : (e?.message || 'No se pudo usar ' + BIO + '.');
 
 async function refreshIfNeeded() {
   if (!session) return;
@@ -113,8 +153,12 @@ async function signIn(ced, password) {
   if (!r.ok) throw new Error(/invalid/i.test(j.error_description || j.msg || '') ? 'Cédula o contraseña incorrecta.' : 'No pudimos entrar. Intenta de nuevo.');
   saveSession({ ...j, expires_at: j.expires_at || Math.floor(Date.now() / 1000) + j.expires_in });
   me = null;
+  const b = bioInfo(); if (b && b.uid !== j.user?.id) bioOff(); else lsSet(LKEY, null);
+  try { sessionStorage.setItem('fiel.unlocked', '1'); } catch {}
 }
-async function signOut() {
+async function signOut(forget) {
+  if (bioInfo() && !forget) { bioLock(); location.hash = '#/entrar'; toast(`Sesión cerrada. Vuelve a entrar con ${BIO}.`); return; }
+  if (forget) { const l = bioOff(); if (l?.refresh_token && !session) saveSession(l); }
   try { await api('/auth/v1/logout', { method: 'POST' }); } catch {}
   saveSession(null); me = null; location.hash = '#/';
 }
@@ -126,6 +170,9 @@ async function loadMe(force) {
   return me;
 }
 let cfgCache = null;
+const fmtBs = (n) => Number(n).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const bcvDay = (cfg) => cfg.bcv_date ? new Date(cfg.bcv_date + 'T12:00:00').toLocaleDateString('es-VE', { day: 'numeric', month: 'short' }) : 'hoy';
+const bsLine = (cfg, eur) => cfg.bcv_rate > 0 ? `€${eur} = <b style="color:var(--fg)">Bs ${fmtBs(eur * cfg.bcv_rate)}</b> · tasa BCV del ${bcvDay(cfg)} (Bs ${fmtBs(cfg.bcv_rate)} por €)` : '';
 const getConfig = async () => cfgCache || (cfgCache = await db.get('app_config', 'id=eq.1&select=*', { single: true }).catch(() => ({ price_eur: 20, kit_eur: 60, bcv_rate: 0, trial_days: 14, support_phone: C.support })));
 
 /* ---------- Cola sin señal (sellos) ---------- */
@@ -239,6 +286,11 @@ function showError(e) {
 }
 const needAuth = (next) => { if (!session) { sessionStorage.setItem('fiel.next', next || location.hash); location.hash = '#/entrar'; return true; } return false; };
 const goNext = () => { const n = sessionStorage.getItem('fiel.next'); sessionStorage.removeItem('fiel.next'); location.hash = n && n !== '#/entrar' && n !== '#/registro' ? n : '#/cartera'; };
+async function offerBio() {
+  if (bioInfo() || localStorage.getItem('fiel.bio.asked') || !(await bioSupported())) return;
+  try { localStorage.setItem('fiel.bio.asked', '1'); } catch {}
+  setTimeout(() => openSheet(`<div class="bigicon">${ic('face', 26)}</div><h2>Entra con <em>${BIO}</em></h2><p>La próxima vez no tendrás que escribir tu contraseña. Tu ${isApple ? 'cara' : 'huella'} no sale de tu teléfono: Fiel nunca la ve ni la guarda.</p><div class="btns"><button class="primary" data-act="bioon">Activar ${BIO}</button><button class="ghost" data-close>Ahora no</button></div>`), 450);
+}
 const clientNav = (a) => setNav([['#/cartera', 'Cartera', 'wallet'], ['#/perfil', 'Perfil', 'user']], a);
 
 /* ---------- Bienvenida ---------- */
@@ -287,7 +339,7 @@ async function submitRegister() {
     if (!r.ok) throw new Error(j.error || 'No pudimos crear la cuenta.');
     await signIn(ced, p1);
     toast(`¡Bienvenido a Fiel, ${first(name)}!`);
-    goNext();
+    goNext(); offerBio();
   } catch (e) { er.textContent = e.message; b.disabled = false; b.textContent = 'Crear mi cuenta'; }
 }
 
@@ -295,8 +347,13 @@ async function submitRegister() {
 on(/^\/entrar$/, async () => {
   if (session) { goNext(); return; }
   setNav(null);
+  const b = bioInfo(), locked = b && lsGet(LKEY);
   app.innerHTML = `<div class="top"><a class="iconbtn" href="#/" aria-label="Volver">${ic('back')}</a></div>
-    <h1>Bienvenido <em>de vuelta</em></h1><p class="lead">Entra con tu cédula y tu contraseña.</p>
+    <h1>${locked ? `Hola, <em>${esc(first(b.name))}</em>` : 'Bienvenido <em>de vuelta</em>'}</h1>
+    ${locked ? `<div class="glass pad" style="text-align:center;margin-top:14px"><button class="bioBtn" data-act="biounlock" aria-label="Entrar con ${BIO}">${ic('face', 40)}</button>
+      <button class="primary" style="margin-top:14px" data-act="biounlock">Entrar con ${BIO}</button><p class="err" id="berr" role="alert"></p>
+      <p class="small" style="margin-top:6px">${fmtCed(b.ced)} · <button class="linkbtn" style="padding:0" data-act="biowho">¿No eres tú?</button></p></div>
+      <p class="small" style="text-align:center;margin:22px 0 4px">O entra con tu contraseña</p>` : '<p class="lead">Entra con tu cédula y tu contraseña.</p>'}
     <form class="form" id="lf" novalidate>
       <label class="flabel" for="lc">Cédula</label>${cedField('lc')}
       <label class="flabel" for="lp">Contraseña</label><input class="inp" id="lp" type="password" autocomplete="current-password" placeholder="Tu contraseña">
@@ -304,6 +361,7 @@ on(/^\/entrar$/, async () => {
       <button class="primary" type="submit" id="lbtn">Entrar</button>
     </form>
     <p class="hint"><button class="linkbtn" data-act="forgot">¿Olvidaste tu contraseña?</button><br>¿No tienes cuenta? <a href="#/registro">Créala aquí</a></p>`;
+  if (locked) { $('#lc').value = b.ced.slice(1); const p = $('#lcp'); if (p) p.value = b.ced[0]; }
 });
 let fails = 0;
 async function submitLogin() {
@@ -312,7 +370,7 @@ async function submitLogin() {
   if (!ced) return (er.textContent = 'Escribe tu cédula.');
   if (!pw) return (er.textContent = 'Escribe tu contraseña.');
   const b = $('#lbtn'); b.disabled = true; b.textContent = 'Entrando…';
-  try { await signIn(ced, pw); fails = 0; goNext(); }
+  try { await signIn(ced, pw); fails = 0; goNext(); offerBio(); }
   catch (e) { fails++; er.innerHTML = esc(e.message) + (fails >= 2 ? ' <button type="button" class="linkbtn" data-act="forgot">¿La olvidaste?</button>' : ''); b.disabled = false; b.textContent = 'Entrar'; }
 }
 
@@ -384,11 +442,12 @@ on(/^\/perfil$/, async () => {
   const ROLE = { dueno: 'Dueño', encargado: 'Encargado', cajero: 'Cajero', mesonero: 'Mesonero', personalizado: 'Equipo' };
   app.innerHTML = `<h1>Perfil</h1>
     <div class="glass pad" style="display:flex;gap:14px;align-items:center"><div class="av" style="width:56px;height:56px;font-size:18px">${initials(u.full_name)}</div><div class="rt"><b style="font-size:18px">${esc(u.full_name)}</b><small>${fmtCed(u.cedula)} · ${fmtPhone(u.phone)}</small></div></div>
-    ${u.is_admin ? `<div class="section"><span class="eyebrow">Administración</span><div class="list"><a class="row" href="#/admin/tiendas"><div class="av">${ic('shield')}</div><div class="rt"><b>Panel de administración</b><small>Tiendas, pagos y configuración</small></div>${ic('shield')}</a></div></div>` : ''}
+    ${u.is_admin ? `<div class="section"><span class="eyebrow">Administración</span><div class="list"><a class="row" href="#/admin/tiendas"><div class="av">${ic('shield')}</div><div class="rt"><b>Panel de administración</b><small>Tiendas, pagos y configuración</small></div></a></div></div>` : ''}
     <div class="section"><span class="eyebrow">Mi negocio</span><div class="list">
       ${stores.map((s) => `<a class="row" href="#/tienda/${s.id}/sellar"><div class="av">${initials(s.name)}</div><div class="rt"><b>${esc(s.name)}${s.verify_status === 'verificada' ? '<span class="tag ok">Verificada</span>' : ''}</b><small>${ROLE[s.role] || s.role} · ${s.status === 'prueba' ? 'En prueba gratis' : s.status}</small></div>${ic('store')}</a>`).join('')}
       <a class="row" href="#/nueva-tienda"><div class="av">${ic('plus')}</div><div class="rt"><b>${stores.length ? 'Registrar otro negocio' : '¿Tienes un negocio?'}</b><small>Crea tu tarjeta de fidelidad. 14 días gratis.</small></div></a>
     </div></div>
+    ${(await bioSupported()) ? `<div class="section"><span class="eyebrow">Seguridad</span><div class="list"><button class="row" data-act="${bioInfo() ? 'biooff' : 'bioon'}"><div class="av">${ic('face')}</div><div class="rt"><b>Entrar con ${BIO}${bioInfo() ? '<span class="tag ok">Activado</span>' : ''}</b><small>${bioInfo() ? `Te lo pedimos cada vez que abres Fiel. Toca para desactivarlo.` : `Entra sin escribir tu contraseña. Tu ${isApple ? 'cara' : 'huella'} no sale de tu teléfono.`}</small></div></button></div></div>` : ''}
     <div class="section"><span class="eyebrow">Ayuda</span><div class="list">
       <button class="row" data-act="install"><div class="av">${ic('upload')}</div><div class="rt"><b>Agregar a la pantalla de inicio</b><small>Abre Fiel con un toque, como una app</small></div></button>
       <a class="row" href="${waLink(C.support, `Hola, soy ${u.full_name}. Necesito ayuda con Fiel.`)}" target="_blank" rel="noopener"><div class="av">${ic('msg')}</div><div class="rt"><b>Escribir a soporte</b><small>Por WhatsApp</small></div></a>
@@ -413,6 +472,7 @@ on(/^\/nueva-tienda$/, async () => {
       <label class="flabel" for="nsr">Premio</label><input class="inp" id="nsr" maxlength="40" placeholder="Ej: Combo gratis">
       <span class="flabel">Sellos para ganarlo</span><div class="chips" id="nsneed">${[6, 8, 10, 12].map((n) => `<button type="button" class="chip${n === 10 ? ' on' : ''}" data-act="pick" data-v="${n}">${n} sellos</button>`).join('')}</div>
       <span class="flabel">Plan</span><div class="chips" id="nsplan"><button type="button" class="chip on" data-act="pick" data-v="mensual">Plan Fiel · €${cfg.price_eur}/mes</button><button type="button" class="chip" data-act="pick" data-v="kit">Plan + Kit · €${cfg.kit_eur} (incluye 1er mes)</button></div>
+      ${cfg.bcv_rate > 0 ? `<p class="small">Pagas en bolívares por Pago Móvil a la tasa oficial del BCV del día. Hoy: ${bsLine(cfg, cfg.price_eur)}.</p>` : ''}
       <label class="check"><input type="checkbox" id="nslg"> <span>Acepto los <button type="button" class="linkbtn" style="padding:0" data-act="legal">Términos para tiendas</button>.</span></label>
       <p class="err" id="nserr" role="alert"></p><button class="primary" type="submit" id="nsbtn">Crear mi tienda</button>
     </form>`;
@@ -620,10 +680,10 @@ on(/^\/tienda\/([0-9a-f-]{36})\/tienda$/, async (id) => {
       <p class="err" id="rlerr"></p><button class="primary" type="submit">Guardar reglas</button></form>`; }
   else if (MT === 'plan') {
     const cfg = await getConfig(); const pays = await db.get('payments', `store_id=eq.${id}&select=*&order=created_at.desc&limit=10`).catch(() => []);
-    const eur = st.plan === 'kit' && !pays.some((p) => p.status === 'validado') ? cfg.kit_eur : cfg.price_eur; const bs = cfg.bcv_rate > 0 ? (eur * cfg.bcv_rate).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : null;
+    const eur = st.plan === 'kit' && !pays.some((p) => p.status === 'validado') ? cfg.kit_eur : cfg.price_eur; const bs = cfg.bcv_rate > 0 ? fmtBs(eur * cfg.bcv_rate) : null;
     const rev = pays.find((p) => p.status === 'pendiente');
     body = `<div class="glass pad"><span class="eyebrow">Tu plan</span><h2>${st.plan === 'kit' ? 'Plan Fiel + Kit' : 'Plan Fiel'}</h2><p>Estado: <b style="color:var(--fg)">${{ prueba: 'Prueba gratis', activa: 'Activa', porvencer: 'Por vencer', vencida: 'Vencida', suspendida: 'Suspendida' }[st.status]}</b>${st.paid_until ? ` · hasta el ${fmtDate(st.paid_until)}` : st.status === 'prueba' ? ` · termina el ${fmtDate(st.trial_ends_at)}` : ''}</p>
-      <p style="margin-top:8px">Monto a pagar: <b style="color:var(--fg)">€${eur}</b>${bs ? ` · <b style="color:var(--fg)">Bs ${bs}</b> (tasa BCV del día)` : ''}</p></div>
+      <p style="margin-top:8px">Monto a pagar: <b style="color:var(--fg)">€${eur}</b>${bs ? ` · <b style="color:var(--fg)">Bs ${bs}</b>` : ''}</p>${bs ? `<p class="small" style="margin-top:4px">Tasa oficial BCV del ${bcvDay(cfg)}: Bs ${fmtBs(cfg.bcv_rate)} por €. Se actualiza sola cada día.</p>` : ''}</div>
       ${rev ? `<div class="notice info">${ic('info', 16)}<span>Tu pago con referencia ${esc(rev.reference)} está en revisión. Te avisamos al confirmarlo.</span></div>` : `<form class="glass pad form" id="pyf" style="margin-top:12px" novalidate><b>Reportar Pago Móvil</b><p class="small">Pide los datos de Pago Móvil por WhatsApp a soporte y reporta aquí tu pago.</p>
       <a class="ghost inline" style="align-self:flex-start" target="_blank" rel="noopener" href="${waLink(cfg.support_phone || C.support, `Hola, quiero pagar el plan de ${st.name} en Fiel. ¿Me pasas los datos de Pago Móvil?`)}">${ic('msg', 16)} Pedir datos de pago</a>
       <label class="flabel" for="pyb">Banco desde el que pagaste</label><input class="inp" id="pyb" maxlength="40" placeholder="Ej: Banesco">
@@ -685,7 +745,13 @@ on(/^\/admin\/(tiendas|pagos|config)$/, async (tab) => {
     body = `<form class="glass pad form" id="cfgf" novalidate>
       <label class="flabel" for="cfp">Precio del plan (€/mes)</label><input class="inp" id="cfp" inputmode="decimal" value="${cfg.price_eur}">
       <label class="flabel" for="cfk">Plan + Kit (€)</label><input class="inp" id="cfk" inputmode="decimal" value="${cfg.kit_eur}">
-      <label class="flabel" for="cfr">Tasa BCV de hoy (Bs por €)</label><input class="inp" id="cfr" inputmode="decimal" value="${cfg.bcv_rate}">
+      <div class="glass pad" style="margin:4px 0 6px"><span class="eyebrow">Tasa BCV del euro</span>
+        <h2 style="margin:4px 0 2px">Bs ${fmtBs(cfg.bcv_rate || 0)} <small style="font-size:14px;color:var(--muted);font-weight:500">por €</small></h2>
+        <p class="small">${cfg.bcv_auto ? `Automática · tasa oficial del ${bcvDay(cfg)}${cfg.bcv_checked_at ? ` · revisada ${fmtTime(cfg.bcv_checked_at)}` : ''}<br>Se revisa cada hora de 6 am a 8 pm, de lunes a sábado.` : 'Manual: la escribes tú.'}</p>
+        ${cfg.bcv_error && cfg.bcv_auto ? `<div class="notice warn">${ic('info', 16)}<span>La última revisión falló (${esc(cfg.bcv_error)}). Se mantiene la tasa anterior.</span></div>` : ''}
+        <label class="check"><input type="checkbox" id="cfa"${cfg.bcv_auto ? ' checked' : ''}> Actualizar sola con la tasa oficial del BCV</label>
+        <div id="cfrw"${cfg.bcv_auto ? ' hidden' : ''}><label class="flabel" for="cfr">Tasa manual (Bs por €)</label><input class="inp" id="cfr" inputmode="decimal" value="${cfg.bcv_rate}"></div>
+        ${cfg.bcv_auto ? '<button type="button" class="ghost" style="margin-top:8px" data-act="bcvnow">Actualizar ahora</button>' : ''}</div>
       <label class="flabel" for="cft">Días de prueba</label><input class="inp" id="cft" inputmode="numeric" value="${cfg.trial_days}">
       <label class="flabel" for="cfs">WhatsApp de soporte</label><input class="inp" id="cfs" inputmode="numeric" value="${cfg.support_phone}">
       <p class="err" id="cferr"></p><button class="primary" type="submit">Guardar</button></form>`;
@@ -732,7 +798,32 @@ document.addEventListener('click', async (e) => {
     case 'reload': location.reload(); break;
     case 'legal': openSheet(LEGAL); break;
     case 'install': installSheet(); break;
-    case 'logout': signOut(); break;
+    case 'logout':
+      if (bioInfo()) openSheet(`<div class="bigicon">${ic('out', 26)}</div><h2>¿Cerrar sesión?</h2><p>Puedes volver a entrar con ${BIO}. Si este teléfono no es tuyo o lo vas a prestar, quita también ${BIO}.</p><div class="btns"><button class="primary" data-act="logout1">Cerrar sesión</button><button class="ghost" data-act="logout2">Cerrar y quitar ${BIO}</button><button class="linkbtn" data-close>Cancelar</button></div>`);
+      else signOut();
+      break;
+    case 'bcvnow': { a.disabled = true; a.textContent = 'Consultando BCV…'; try { const r = await db.rpc('admin_refresh_bcv'); cfgCache = null; toast(String(r).startsWith('ok') ? 'Tasa actualizada' : 'No se pudo actualizar: ' + r); } catch (err) { toast(err.message); } route(); break; }
+    case 'logout1': closeSheet(); signOut(); break;
+    case 'logout2': closeSheet(); signOut(true); break;
+    case 'bioon': {
+      try { const u = await loadMe(); await bioEnable(u); closeSheet(); toast(`${BIO} activado`); if (location.hash === '#/perfil') route(); }
+      catch (err) { closeSheet(); toast(bioErr(err)); }
+      break; }
+    case 'biooff': openSheet(`<div class="bigicon">${ic('face', 26)}</div><h2>¿Desactivar ${BIO}?</h2><p>Tendrás que escribir tu cédula y contraseña para entrar.</p><div class="btns"><button class="primary" data-act="biooff2">Desactivar</button><button class="ghost" data-close>Cancelar</button></div>`); break;
+    case 'biooff2': bioOff(); closeSheet(); toast(`${BIO} desactivado`); route(); break;
+    case 'biowho': { const l = bioOff(); if (l?.refresh_token) { saveSession(l); try { await api('/auth/v1/logout', { method: 'POST' }); } catch {} saveSession(null); } route(); break; }
+    case 'biounlock': {
+      const er = $('#berr'); if (er) er.textContent = '';
+      try {
+        await bioCheck();
+        const l = lsGet(LKEY); if (!l) { route(); break; }
+        saveSession({ ...l, expires_at: 0 }); lsSet(LKEY, null); me = null;
+        await refreshIfNeeded();
+        if (!session) { bioOff(); toast('Tu sesión venció. Entra con tu contraseña.'); route(); break; }
+        try { sessionStorage.setItem('fiel.unlocked', '1'); } catch {}
+        goNext();
+      } catch (err) { if (er) er.textContent = bioErr(err); else toast(bioErr(err)); }
+      break; }
     case 'forgot': openSheet(`<div class="bigicon">${ic('lock', 26)}</div><h2>¿Olvidaste tu <em>contraseña</em>?</h2><p>Escríbenos por WhatsApp desde el número de tu cuenta con tu cédula y te ayudamos a crear una nueva.</p><div class="btns"><a class="primary wa" target="_blank" rel="noopener" href="${waLink(C.support, 'Hola, olvidé mi contraseña de Fiel. Mi cédula es: ')}">${ic('msg', 18)} Escribir a soporte</a><button class="ghost" data-close>Cancelar</button></div>`); break;
     case 'prize': openSheet(`<div class="bigicon gold">${ic('gift', 26)}</div><h2>${esc(a.dataset.reward)}</h2><p>en ${esc(a.dataset.store)}</p><div class="bigcode">${a.dataset.code}</div><p class="small">Muéstralo en caja o escríbelo en tu pedido en línea. Vence el ${fmtDate(a.dataset.exp)}.</p><div class="btns"><button class="primary" data-close>Listo</button></div>`); break;
     case 'join': joinStore(a.dataset.slug); break;
@@ -794,13 +885,15 @@ document.addEventListener('submit', async (e) => {
     try { await db.insert('payments', { store_id: hid, amount_eur: eur, amount_bs: Math.round(eur * (cfg.bcv_rate || 0) * 100) / 100, bank, reference: ref }); toast('Recibimos tu pago. Te avisamos al confirmarlo.'); route(); } catch (err) { er.textContent = err.message; }
   } else if (id === 'cfgf') {
     const num = (s) => parseFloat(String($(s).value).replace(',', '.'));
-    const patch = { price_eur: num('#cfp'), kit_eur: num('#cfk'), bcv_rate: num('#cfr'), trial_days: parseInt($('#cft').value, 10), support_phone: $('#cfs').value.replace(/\D/g, ''), updated_at: new Date().toISOString() };
+    const auto = $('#cfa').checked;
+    const patch = { price_eur: num('#cfp'), kit_eur: num('#cfk'), bcv_auto: auto, ...(auto ? {} : { bcv_rate: num('#cfr') }), trial_days: parseInt($('#cft').value, 10), support_phone: $('#cfs').value.replace(/\D/g, ''), updated_at: new Date().toISOString() };
     if (Object.values(patch).some((v) => typeof v === 'number' && !(v >= 0))) { $('#cferr').textContent = 'Revisa los números.'; return; }
-    try { await db.update('app_config', 'id=eq.1', patch); cfgCache = null; toast('Ajustes guardados'); } catch (err) { $('#cferr').textContent = err.message; }
+    try { await db.update('app_config', 'id=eq.1', patch); cfgCache = null; if (auto) await db.rpc('admin_refresh_bcv').catch(() => {}); toast('Ajustes guardados'); route(); } catch (err) { $('#cferr').textContent = err.message; }
   }
 });
 document.addEventListener('input', (e) => { const hid = (location.hash.match(/tienda\/([0-9a-f-]{36})/) || [])[1]; if (['dname', 'dtype', 'drw', 'dterms'].includes(e.target.id)) livePreview(hid); });
 document.addEventListener('change', async (e) => {
+  if (e.target.id === 'cfa') { const w = $('#cfrw'); if (w) w.hidden = e.target.checked; return; }
   if (e.target.id !== 'lgf') return; const f = e.target.files[0]; if (!f) return;
   if (f.size > 8 * 1024 * 1024) { toast('El archivo es muy pesado (máximo 8 MB).'); return; }
   toast('Procesando tu logo…'); const r = await processLogo(f);
@@ -810,5 +903,6 @@ document.addEventListener('change', async (e) => {
   toast(r.hasAlpha ? 'Tu PNG transparente quedó perfecto. Toca Guardar.' : r.removed ? 'Le quitamos el fondo. Revisa que se vea completo y toca Guardar.' : 'Logo listo. Toca Guardar.');
 });
 
+if (bioInfo() && session) { let u = null; try { u = sessionStorage.getItem('fiel.unlocked'); } catch {} if (!u) { const h = location.hash; bioLock(); if (h && !/^#\/(entrar|registro)?$/.test(h)) sessionStorage.setItem('fiel.next', h); location.hash = '#/entrar'; } }
 route();
 flushQueue();
