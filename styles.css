@@ -48,7 +48,7 @@ textarea.inp{height:auto;min-height:90px;padding:14px 16px;resize:vertical;line-
 .list{display:flex;flex-direction:column;gap:10px}
 .rt{flex:1;min-width:0}.rt b{display:block;font-size:15px;font-weight:600}.rt small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
 .av{width:42px;height:42px;border-radius:50%;flex:none;display:grid;place-items:center;font-weight:700;font-size:14px;background:#26292d;box-shadow:var(--sh-in);overflow:hidden}
-.av img{width:100%;height:100%;object-fit:contain}
+.av{position:relative}.av img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .tag{display:inline-block;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.08);color:var(--muted);margin-left:6px;vertical-align:2px}
 .tag.ok{background:rgba(127,214,168,.14);color:var(--good)}.tag.warn{background:rgba(233,184,114,.14);color:var(--warn)}.tag.bad{background:rgba(238,122,106,.14);color:var(--bad)}.tag.gold{background:rgba(233,196,106,.16);color:var(--gold)}
 .section{margin-top:26px}.section>.eyebrow{display:block;margin-bottom:12px}
@@ -65,25 +65,6 @@ textarea.inp{height:auto;min-height:90px;padding:14px 16px;resize:vertical;line-
 .check input{width:20px;height:20px;flex:none;margin-top:1px;accent-color:#cfd3d8}
 
 /* Tarjeta */
-.card{position:relative;aspect-ratio:1.6;border-radius:22px;padding:18px 18px 16px;overflow:hidden;color:var(--ink,#fff);display:flex;flex-direction:column;box-shadow:0 18px 40px -18px rgba(0,0,0,.9);isolation:isolate}
-.card::before{content:'';position:absolute;inset:0;z-index:-1;background:var(--cbg)}
-.card.metal{--cbg:linear-gradient(135deg,#2c2f34,#111214 60%,color-mix(in srgb,var(--a) 35%,#111214))}
-.card.color{--cbg:linear-gradient(135deg,var(--a),color-mix(in srgb,var(--a) 70%,#000))}
-.card.grad{--cbg:linear-gradient(135deg,var(--a),var(--a2))}
-.card.papel{--cbg:linear-gradient(135deg,#f3ece0,#e6dccb);--ink:#1f1b16}
-.card.blanco{--cbg:#f7f7f5;--ink:#151515}
-.card .ch{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
-.card .ct small{display:block;font-size:10px;letter-spacing:.16em;text-transform:uppercase;opacity:.7}
-.card .ct b{display:block;font-size:17px;font-weight:700;letter-spacing:-.01em;margin-top:2px}
-.card .cn{font-size:30px;font-weight:700;line-height:1;letter-spacing:-.03em}.card .cn small{font-size:14px;opacity:.6;font-weight:600}
-.card .clogo{position:absolute;right:16px;top:50%;transform:translateY(-50%);width:34%;height:46%;display:flex;align-items:center;justify-content:flex-end;opacity:.95;z-index:-1}
-.card .clogo img{max-width:100%;max-height:100%;object-fit:contain}
-.card .dots{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto}
-.card .dots i{width:13px;height:13px;border-radius:50%;border:1.5px solid currentColor;opacity:.45}
-.card .dots i.on{background:var(--a);border-color:var(--a);opacity:1}
-.card.color .dots i.on,.card.grad .dots i.on{background:var(--ink,#fff);border-color:var(--ink,#fff)}
-.card .rw{font-size:12.5px;margin-top:10px;opacity:.9}.card .rw small{display:block;font-size:10px;opacity:.75}
-.card.prize::after{content:'Premio listo';position:absolute;right:14px;bottom:14px;font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--gold);color:#1a1408}
 
 .wallet{display:flex;flex-direction:column;gap:14px}
 .wallet .item{border:0;background:none;padding:0;text-align:left;width:100%}

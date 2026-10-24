@@ -1,4 +1,5 @@
 // Fiel · app (sin dependencias). Habla directo con Supabase (Auth + PostgREST + Storage + Functions).
+import * as K from '/card.js';
 const C = window.FIEL_CONFIG;
 const $ = (s, r = document) => r.querySelector(s);
 const app = $('#app'), nav = $('#nav'), sw = $('#sheet-wrap'), sheet = $('#sheet'), toastEl = $('#toast');
@@ -194,18 +195,21 @@ window.addEventListener('online', () => { flushQueue(); if (location.hash.includ
 window.addEventListener('offline', () => { if (location.hash.includes('/sellar')) route(); });
 
 /* ---------- Tarjeta ---------- */
-const STYLES = [['metal', 'Negro metálico'], ['color', 'Color sólido'], ['grad', 'Degradado'], ['papel', 'Papel'], ['blanco', 'Blanco']];
-const COLORS = ['#e4572e', '#d9a21b', '#2f9e6b', '#2b6cb0', '#8b5cf6', '#e2559b', '#7a4a2a', '#111111', '#c9a14a', '#39b5c4'];
-function cardHTML(st, stamps = 0, { prize = false } = {}) {
+const DEF_LOOK = { finish: 'metal', accent: '#c9a14a', a2: '#f3e2b3', font: 'geist', shape: 'dot', logoMode: 'circulo', logoColor: 'original', anim: 'ink', personality: 'minimalista' };
+const LEGACY_FINISH = { metal: 'metal', color: 'mate', grad: 'grad', papel: 'papel', blanco: 'blanco' };
+function look(st) {
   const d = st.design || {};
-  const a = d.accent || '#c9a14a', a2 = d.a2 || '#f2c14e', style = d.style || 'metal';
-  const ink = style === 'papel' ? '#1f1b16' : style === 'blanco' ? '#151515' : (style === 'color' || style === 'grad') && lum(a) > 0.55 ? '#141414' : '#ffffff';
-  let dots = ''; for (let i = 0; i < st.needed; i++) dots += `<i class="${i < stamps ? 'on' : ''}"></i>`;
-  return `<div class="card ${style}${prize ? ' prize' : ''}" style="--a:${a};--a2:${a2};--ink:${ink}">
-    ${d.logo ? `<div class="clogo"><img src="${esc(d.logo)}" alt=""></div>` : ''}
-    <div class="ch"><div class="ct"><small>${esc(st.business_type || '')}</small><b>${esc(st.name)}</b></div><div class="cn">${stamps}<small>/${st.needed}</small></div></div>
-    <div class="dots">${dots}</div>
-    <div class="rw">Premio · ${esc(st.reward)}${(st.terms || '').trim() ? '<small>*Aplican condiciones</small>' : ''}</div></div>`;
+  const s = { ...DEF_LOOK, ...d, name: st.name, type: st.business_type || '', reward: st.reward, needed: st.needed, terms: st.terms || '' };
+  if (!d.finish && d.style) s.finish = LEGACY_FINISH[d.style] || 'metal';
+  if (!s.iso && !s.wordm && d.logo) { s.iso = d.logo; s.m_iso = { ratio: 1 }; }
+  if (!K.FL[s.finish]) s.finish = 'metal';
+  return s;
+}
+const cardHTML = (st, stamps = 0, o = {}) => K.cardHTML(st.finish ? st : look(st), stamps, o);
+function cellsHTML(st, n) {
+  const s = look(st), ui = K.uiColor(s); let h = '';
+  for (let i = 0; i < s.needed; i++) h += `<div class="cell${i < n ? ' on' : ''}" style="--ui:${ui}">${i < n ? K.shapeSVG(s) : i + 1}</div>`;
+  return h + `<div class="cell gift">${ic('gift', 18)}</div>`;
 }
 function lum(h) { const n = parseInt(String(h).replace('#', ''), 16); const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255; return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; }
 const termsHTML = (t, title = 'Términos y condiciones del premio') => { const li = String(t || '').split(/\n+/).map((x) => x.trim()).filter(Boolean); return li.length ? `<div class="terms"><b>${title}</b><ul>${li.map((l) => `<li>${esc(l)}</li>`).join('')}</ul></div>` : ''; };
@@ -223,48 +227,7 @@ async function qrInto(el, text) {
 }
 const storeURL = (slug) => `${location.origin}/#/t/${slug}`;
 
-/* ---------- Procesar logo (PNG transparente: intacto; fondo liso: se quita con cuidado) ---------- */
-function processLogo(file) {
-  return new Promise((res) => {
-    const fr = new FileReader();
-    fr.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const MAX = 900, sc = Math.min(1, MAX / Math.max(img.width, img.height)), W = Math.max(1, Math.round(img.width * sc)), H = Math.max(1, Math.round(img.height * sc));
-        const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, W, H);
-        const im = x.getImageData(0, 0, W, H), d = im.data, border = [];
-        for (let i = 0; i < W; i++) border.push(i, (H - 1) * W + i); for (let j = 0; j < H; j++) border.push(j * W, j * W + W - 1);
-        let tr = 0; for (let i = 3; i < d.length; i += 16) if (d[i] < 250) tr++;
-        const hasAlpha = tr > (d.length / 16) * 0.01;
-        let removed = false;
-        if (!hasAlpha) {
-          let r = 0, g = 0, b = 0; border.forEach((p) => { r += d[p * 4]; g += d[p * 4 + 1]; b += d[p * 4 + 2]; }); r /= border.length; g /= border.length; b /= border.length;
-          let sim = 0; border.forEach((p) => { const i = p * 4; if (Math.abs(d[i] - r) + Math.abs(d[i + 1] - g) + Math.abs(d[i + 2] - b) < 30) sim++; });
-          if (sim > border.length * 0.85) {
-            removed = true; const tol = 26, soft = 34, seen = new Uint8Array(W * H), st = [];
-            border.forEach((p) => { if (!seen[p]) { seen[p] = 1; st.push(p); } });
-            while (st.length) {
-              const p = st.pop(), i = p * 4, dist = Math.abs(d[i] - r) + Math.abs(d[i + 1] - g) + Math.abs(d[i + 2] - b);
-              if (dist > tol + soft) continue; if (dist > tol) { d[i + 3] = Math.min(d[i + 3], Math.round(((dist - tol) / soft) * 255)); continue; }
-              d[i + 3] = 0; const px = p % W, py = (p / W) | 0;
-              if (px > 0 && !seen[p - 1]) { seen[p - 1] = 1; st.push(p - 1); } if (px < W - 1 && !seen[p + 1]) { seen[p + 1] = 1; st.push(p + 1); }
-              if (py > 0 && !seen[p - W]) { seen[p - W] = 1; st.push(p - W); } if (py < H - 1 && !seen[p + W]) { seen[p + W] = 1; st.push(p + W); }
-            }
-            x.putImageData(im, 0, 0);
-          }
-        }
-        let x0 = W, y0 = H, x1 = -1, y1 = -1;
-        for (let y = 0; y < H; y++) for (let xx = 0; xx < W; xx++) if (d[(y * W + xx) * 4 + 3] > 24) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-        if (x1 < 0) { res(null); return; }
-        const pad = Math.round(Math.max(x1 - x0, y1 - y0) * 0.04), ow = x1 - x0 + 1 + pad * 2, oh = y1 - y0 + 1 + pad * 2;
-        const o = document.createElement('canvas'); o.width = ow; o.height = oh; o.getContext('2d').drawImage(c, x0 - pad, y0 - pad, ow, oh, 0, 0, ow, oh);
-        o.toBlob((blob) => res({ blob, preview: o.toDataURL('image/png'), removed, hasAlpha }), 'image/png');
-      };
-      img.onerror = () => res(null); img.src = fr.result;
-    };
-    fr.readAsDataURL(file);
-  });
-}
+
 
 /* ---------- Router ---------- */
 const routes = [];
@@ -298,9 +261,9 @@ const clientNav = (a) => setNav([['#/cartera', 'Cartera', 'wallet'], ['#/perfil'
 on(/^\/$/, async () => {
   if (session) { location.hash = '#/cartera'; return; }
   setNav(null);
-  const demo = [{ name: 'Molienda Café', business_type: 'Cafetería', reward: 'Un café gratis', needed: 8, design: { style: 'papel', accent: '#7a4a2a' } },
-    { name: 'Kaiser Barber', business_type: 'Barbería', reward: 'Corte gratis', needed: 6, design: { style: 'grad', accent: '#c9a14a', a2: '#3a2c12' } },
-    { name: 'Toro Burgers', business_type: 'Hamburguesería', reward: 'Combo gratis', needed: 10, design: { style: 'metal', accent: '#e4572e' } }];
+  const demo = [{ name: 'Molienda Café', business_type: 'Cafetería', reward: 'Un café gratis', needed: 8, design: { finish: 'papel', accent: '#7a4a2a', a2: '#c89f7a', font: 'fraunces' } },
+    { name: 'Kaiser Barber', business_type: 'Barbería', reward: 'Corte gratis', needed: 6, design: { finish: 'onix', accent: '#c9a14a', a2: '#f3e2b3', font: 'cormorant' } },
+    { name: 'Toro Burgers', business_type: 'Hamburguesería', reward: 'Combo gratis', needed: 10, design: { finish: 'anodizado', accent: '#e4572e', a2: '#f2a541', font: 'unbounded' } }];
   app.innerHTML = `<section class="hero">${LOGO}<h1>Todas tus tarjetas de fidelidad, <em>en un solo lugar</em>.</h1>
     <p class="lead">Suma sellos diciendo tu cédula al pagar y recibe tus premios por WhatsApp.</p>
     <div class="stack">${demo.map((d, i) => cardHTML(d, [5, 3, 7][i])).join('')}</div>
@@ -405,12 +368,16 @@ on(/^\/tarjeta\/([0-9a-f-]{36})$/, async (sid) => {
   ]);
   const st = card.stores, left = st.needed - card.stamps, pz = prize[0], u = await loadMe();
   app.innerHTML = `<div class="top"><a class="iconbtn" href="#/cartera" aria-label="Volver">${ic('back')}</a><b class="sp">${esc(st.name)}${st.verify_status === 'verificada' ? ' <span class="tag ok">Verificada</span>' : ''}</b></div>
-    ${cardHTML(st, card.stamps, { prize: !!pz })}
+    <div class="pv-host" id="cdh">${cardHTML(st, card.stamps, { prize: !!pz })}</div>
+    <div class="glass" style="margin-top:14px"><div class="cgrid">${cellsHTML(st, card.stamps)}</div></div>
     ${pz ? `<div class="glass pad" style="margin-top:14px;text-align:center"><span class="eyebrow">Premio por retirar</span><h2>${esc(pz.reward)}</h2><div class="bigcode">${pz.code}</div><p class="small">Muéstralo en caja o escríbelo en tu pedido en línea. Vence el ${fmtDate(pz.expires_at)}.</p></div>`
       : `<p class="lead" style="margin-top:14px">Te falta${left > 1 ? 'n' : ''} <b style="color:var(--fg)">${left} sello${left > 1 ? 's' : ''}</b> para: ${esc(st.reward)}</p>`}
     ${termsHTML(pz ? pz.terms : st.terms)}
     <div class="section"><span class="eyebrow">Cómo sumar sellos</span><div class="glass pad"><p>Cuando pagues en ${esc(st.name)}, dile al cajero tu cédula. Si compras en línea, la tienda te sella con el mismo número.</p><p style="margin-top:8px;font-size:22px;font-weight:700;color:var(--fg)">${fmtCed(u.cedula)}</p></div></div>
     <div class="section"><span class="eyebrow">Historial</span><div class="list">${hist.map((h) => `<div class="row"><div class="av">${ic('stamp', 18)}</div><div class="rt"><b>+${h.qty} sello${h.qty > 1 ? 's' : ''}${h.channel === 'online' ? '<span class="tag">En línea</span>' : ''}</b><small>${fmtTime(h.created_at)}</small></div></div>`).join('') || '<p class="empty">Todavía no hay sellos aquí.</p>'}</div></div>`;
+  const seenK = 'fiel.seen.' + sid; let seen = null; try { seen = localStorage.getItem(seenK); } catch {}
+  try { localStorage.setItem(seenK, String(card.stamps)); } catch {}
+  if (seen !== null && card.stamps > +seen && !pz) setTimeout(() => { const c = $('#cdh .card'), dot = c?.querySelectorAll('.dots i')[card.stamps - 1]; if (c) K.effect(look(st), $('#cdh'), dot || c, c); }, 450);
 });
 
 /* ---------- Página pública de la tienda (QR) ---------- */
@@ -494,7 +461,7 @@ async function submitNewStore() {
   const taken = await db.get('stores', `slug=like.${slug}*&select=slug`).catch(() => []);
   if (taken.some((t) => t.slug === slug)) { let i = 2; while (taken.some((t) => t.slug === `${slug}-${i}`)) i++; slug = `${slug}-${i}`; }
   try {
-    const st = await db.insert('stores', { owner_id: uid(), name, slug, business_type: type, zone, phone, instagram: ig || null, plan, reward, needed, design: { style: 'metal', accent: '#c9a14a' } });
+    const st = await db.insert('stores', { owner_id: uid(), name, slug, business_type: type, zone, phone, instagram: ig || null, plan, reward, needed, design: { ...DEF_LOOK, finish: 'anodizado', accent: '#2b6cb0', a2: '#9fe7ff', personality: 'minimalista' } });
     toast(`¡${name} está lista!`);
     location.hash = `#/tienda/${st.id}/tienda`;
   } catch (e) { er.textContent = e.message; b.disabled = false; b.textContent = 'Crear mi tienda'; }
@@ -519,7 +486,7 @@ function storeNav(id, tab, can) {
   items.push(['#/cartera', 'Cartera', 'wallet']);
   setNav(items, `#/tienda/${id}/${tab}`);
 }
-const storeHead = (st, sub) => `<div class="top"><div class="av">${st.design?.logo ? `<img src="${esc(st.design.logo)}" alt="">` : initials(st.name)}</div><div class="rt"><small class="eyebrow">${sub}</small><b style="font-size:19px">${esc(st.name)}${st.verify_status === 'verificada' ? ' <span class="tag ok">Verificada</span>' : ''}</b></div></div>`;
+const storeHead = (st, sub) => `<div class="top"><div class="av">${(() => { const L = look(st), src = L.iso || L.wordm; return src ? `<img src="${esc(src)}" alt="">` : initials(st.name); })()}</div><div class="rt"><small class="eyebrow">${sub}</small><b style="font-size:19px">${esc(st.name)}${st.verify_status === 'verificada' ? ' <span class="tag ok">Verificada</span>' : ''}</b></div></div>`;
 function planBanner(st) {
   if (st.status === 'vencida' || st.status === 'suspendida') return `<div class="notice warn">${ic('lock', 16)}<span>Tu plan está ${st.status}. Tus clientes conservan sus sellos, pero no puedes sellar hasta renovar en Mi tienda › Plan.</span></div>`;
   if (st.status === 'prueba') { const d = Math.max(0, Math.ceil((new Date(st.trial_ends_at) - Date.now()) / 864e5)); return `<div class="notice info">${ic('info', 16)}<span>Prueba gratis: te quedan <b>${d} día${d === 1 ? '' : 's'}</b>.</span></div>`; }
@@ -648,19 +615,7 @@ on(/^\/tienda\/([0-9a-f-]{36})\/tienda$/, async (id) => {
   if (!tabs.some((t) => t[0] === MT)) MT = 'tarjeta';
   let body = '';
   const d = st.design || {};
-  if (MT === 'tarjeta') body = `<div id="pv">${cardHTML(st, Math.min(3, st.needed - 1))}</div>
-    <form class="form" id="dsf" novalidate>
-      <span class="flabel">Tu logo</span><div class="logoprev" id="lgp">${d.logo ? `<img src="${esc(d.logo)}" alt="">` : '<span style="color:#888;font-size:13px">Sin logo</span>'}</div>
-      <div class="notice info">${ic('info', 16)}<span><b>Súbelo en PNG con fondo transparente</b> para que se vea exacto. Si tiene fondo blanco, se lo quitamos.</span></div>
-      <label class="ghost inline" style="align-self:flex-start">${ic('upload', 16)} ${d.logo ? 'Cambiar logo' : 'Subir logo'}<input type="file" id="lgf" accept="image/png,image/jpeg,image/webp" hidden></label>
-      <span class="flabel">Estilo</span><div class="chips" id="dstyle">${STYLES.map(([v, l]) => `<button type="button" class="chip${(d.style || 'metal') === v ? ' on' : ''}" data-act="dset" data-k="style" data-v="${v}">${l}</button>`).join('')}</div>
-      <span class="flabel">Color</span><div class="swatches">${COLORS.map((c) => `<button type="button" class="sw${(d.accent || '#c9a14a') === c ? ' on' : ''}" style="background:${c}" data-act="dset" data-k="accent" data-v="${c}" aria-label="${c}"></button>`).join('')}</div>
-      <label class="flabel" for="dname">Nombre en la tarjeta</label><input class="inp" id="dname" value="${esc(st.name)}" maxlength="40">
-      <label class="flabel" for="dtype">Tipo de negocio</label><input class="inp" id="dtype" value="${esc(st.business_type)}" maxlength="40">
-      <label class="flabel" for="drw">Premio</label><input class="inp" id="drw" value="${esc(st.reward)}" maxlength="40">
-      <span class="flabel">Sellos para ganarlo</span><div class="chips" id="dneed">${[4, 5, 6, 8, 10, 12, 15].map((n) => `<button type="button" class="chip${st.needed === n ? ' on' : ''}" data-act="dneed" data-v="${n}">${n}</button>`).join('')}</div>
-      <label class="flabel" for="dterms">Términos y condiciones del premio (uno por línea)</label><textarea class="inp" id="dterms" maxlength="240" placeholder="Ej: Válido con compras desde $10">${esc(st.terms)}</textarea>
-      <p class="err" id="derr"></p><button class="primary" type="submit" id="dbtn">Guardar cambios</button></form>`;
+  if (MT === 'tarjeta') body = dzOpen(st);
   else if (MT === 'qr') body = `<div class="glass pad" style="text-align:center"><b style="font-size:18px">${esc(st.name)}</b><p class="small">Escanea y suma sellos</p><div class="qrbox" id="qrb"></div><p class="small" style="word-break:break-all">${esc(storeURL(st.slug))}</p></div>
     <div class="btns" style="display:flex;flex-direction:column;gap:10px;margin-top:14px"><button class="ghost" data-act="copy" data-v="${esc(storeURL(st.slug))}">Copiar enlace</button><a class="ghost" href="${waLink('', '')}" style="display:none"></a>
     <a class="ghost" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`Suma sellos en ${st.name} con Fiel y gana: ${st.reward}. Agrega tu tarjeta aquí: ${storeURL(st.slug)}`)}">${ic('msg', 16)} Compartir por WhatsApp</a></div>
@@ -704,26 +659,176 @@ on(/^\/tienda\/([0-9a-f-]{36})\/tienda$/, async (id) => {
   app.innerHTML = `${storeHead(st, 'Mi tienda')}${planBanner(st)}<div class="chips" style="margin:6px 0 16px">${tabs.map(([k, l]) => `<button class="chip${MT === k ? ' on' : ''}" data-act="mt" data-v="${k}" data-id="${id}">${l}</button>`).join('')}</div>${body}`;
   if (MT === 'qr') qrInto($('#qrb'), storeURL(st.slug));
 });
-let pendingLogo = null;
-async function saveDesign(id) {
-  const { st } = await loadStore(id); const er = $('#derr'); er.textContent = '';
-  const b = $('#dbtn'); b.disabled = true; b.textContent = 'Guardando…';
-  try {
-    const design = { ...(st.design || {}) };
-    if (pendingLogo) {
-      const path = `${id}/logo-${Date.now()}.png`;
-      const r = await api(`/storage/v1/object/logos/${path}`, { method: 'POST', body: pendingLogo, headers: { 'Content-Type': 'image/png', 'x-upsert': 'true' } });
-      void r; design.logo = `${C.supabaseUrl}/storage/v1/object/public/logos/${path}`; pendingLogo = null;
-    }
-    const patch = { design, name: $('#dname').value.trim() || st.name, business_type: $('#dtype').value.trim() || st.business_type, reward: $('#drw').value.trim() || st.reward, needed: st.needed, terms: $('#dterms').value.trim() };
-    await db.update('stores', `id=eq.${id}`, patch);
-    toast('Cambios guardados'); delete storeCache[id]; route();
-  } catch (e) { er.textContent = e.message; b.disabled = false; b.textContent = 'Guardar cambios'; }
+/* ---------- Editor de diseño (igual que la demo) ---------- */
+let DZ = null; // { id, s, dirty, font }
+const dzStamps = () => Math.min(3, DZ.s.needed - 1);
+const DZ_BACK = [
+  { name: 'Molienda Café', type: 'Cafetería', finish: 'papel', accent: '#7a4a2a', a2: '#c89f7a', font: 'fraunces', logoMode: 'circulo', reward: 'Un café gratis', needed: 8 },
+  { name: 'Kaiser Barber', type: 'Barbería', finish: 'carbono', accent: '#c9a14a', a2: '#f3e2b3', font: 'bebas', logoMode: 'circulo', reward: 'Corte gratis', needed: 6 },
+];
+function dzOpen(st) {
+  if (!DZ || DZ.id !== st.id || !DZ.dirty) DZ = { id: st.id, s: look(st), dirty: false, font: null };
+  return `<div class="dz" id="dz">${dzHTML()}</div><div class="dzsave${DZ.dirty ? ' show' : ''}" id="dzsave"><span>Tienes cambios sin guardar</span><button class="ghost" data-act="dz" data-op="discard">Descartar</button><button class="primary" data-act="dz" data-op="save" id="dzbtn">Guardar</button></div>`;
 }
-function livePreview(id) {
-  const st = storeCache[id]?.st; if (!st) return;
-  const tmp = { ...st, name: $('#dname')?.value || st.name, business_type: $('#dtype')?.value || st.business_type, reward: $('#drw')?.value || st.reward, terms: $('#dterms')?.value || '' };
-  $('#pv').innerHTML = cardHTML(tmp, Math.min(3, tmp.needed - 1));
+function dzHTML() {
+  const t = DZ.s, recs = K.recsFor(t), ideas = K.kindOf(t.type)[2], P_ = K.PERS[t.personality] || K.PERS.minimalista;
+  const chips = (k, list) => `<div class="chips" data-k="${k}">${list.map(([v, l]) => `<button type="button" class="chip${t[k] === v ? ' on' : ''}" data-act="dz" data-op="opt" data-v="${v}">${l}</button>`).join('')}</div>`;
+  return `<div class="pv"><div class="pv-host" id="pvh"><div id="pv">${K.cardHTML(t, dzStamps())}</div></div>
+    <div class="pv-actions"><button type="button" class="ghost inline" data-act="dz" data-op="test">${ic('stamp', 15)} Probar animación</button><small>Así la ve tu cliente</small></div></div>
+  <div class="sec"><span class="eyebrow">01 · Tu marca</span><h3>Cuéntanos <em>quién eres</em></h3>
+    <label class="flabel" for="dzn">Nombre del negocio</label><input class="inp" id="dzn" value="${esc(t.name)}" maxlength="24">
+    <label class="flabel" for="dzt">¿Qué tipo de negocio es?</label><input class="inp" id="dzt" value="${esc(t.type)}" maxlength="32" placeholder="Restaurante, barbería, tienda de ropa…">
+    <span class="flabel">Personalidad de tu marca</span>
+    <div class="chips">${Object.entries(K.PERS).map(([k, p]) => `<button type="button" class="chip${t.personality === k ? ' on' : ''}" data-act="dz" data-op="pers" data-v="${k}">${p.label}</button>`).join('')}</div></div>
+  <div class="sec"><span class="eyebrow">02 · Tu logo</span><h3>Sube tu logo, <em>lo dejamos listo</em></h3>
+    <p>Si tienes isotipo (el símbolo) y logotipo (el nombre), sube los dos.</p>
+    <div class="pnghint">${ic('info', 16)}<span><b>Para el mejor resultado, súbelo en PNG con fondo transparente.</b> Así se ve exacto, sin perder letras ni detalles. Si solo lo tienes en JPG o con fondo blanco, se lo quitamos y puedes volver al original si algo no se ve bien.</span></div>
+    <div class="slots2">${['iso', 'wordm'].map((k) => { const v = t[k], m = t['m_' + k]; return `<label class="lslot" for="up-${k}"><div class="ph${v ? ' has' : ''}">${v ? `<img src="${esc(v)}" alt="">` : ic('upload', 22)}</div>
+      <b>${k === 'iso' ? 'Isotipo' : 'Logotipo'}</b><small>${k === 'iso' ? 'El símbolo solo' : 'El nombre o el logo completo'}</small>
+      ${m && v ? `<div class="ok">${m.hadAlpha ? '<span class="tag ok">PNG transparente</span>' : m.removed ? (t['bg_' + k] ? '<span class="tag">Con fondo original</span>' : '<span class="tag ok">Fondo quitado</span>') : '<span class="tag ok">Listo</span>'}</div>${m.removed && m.raw ? `<button type="button" class="linkbtn bgt" data-act="dz" data-op="bgtoggle" data-k="${k}">${t['bg_' + k] ? 'Quitar el fondo' : '¿Se cortó algo? Usar con su fondo'}</button>` : ''}${v ? `<button type="button" class="linkbtn bgt" data-act="dz" data-op="rmlogo" data-k="${k}">Quitar</button>` : ''}` : ''}
+      <input type="file" id="up-${k}" accept="image/png,image/jpeg,image/webp" hidden></label>`; }).join('')}</div>
+    ${t.lowContrast ? `<p class="pnghint" style="margin:4px 0 0">${ic('info', 16)}<span>Tu logo y el fondo de la tarjeta tienen colores parecidos, así que lo pusimos en <b>Monocromo</b> para que se lea. Si prefieres sus colores originales, elige un estilo de tarjeta más ${K.inkFor(t) === '#ffffff' ? 'claro' : 'oscuro'}.</span></p>` : ''}
+    <span class="flabel">Cómo se ve el logo</span>${chips('logoColor', K.LOGOCOLORS)}
+    <span class="flabel">Dónde va el logo</span>${chips('logoMode', K.LOGOMODES)}</div>
+  <div class="sec"><span class="eyebrow">03 · Recomendado para ti</span><h3>Diseños hechos <em>para tu marca</em></h3>
+    <p>${t.palette ? 'Usamos los colores de tu logo' : 'Usamos tus colores actuales'} y la personalidad ${P_.label.toLowerCase()}, que ${P_.why}.</p>
+    <div class="recs">${recs.map((r, i) => `<div class="glass rec">${K.cardHTML({ ...t, ...r }, dzStamps())}
+      <div class="rec-h"><div><b>${r.n}</b><small>${K.FL[r.finish]} · tipografía ${K.FONTMAP[r.font].label.toLowerCase()}</small></div><button type="button" class="ghost inline sm" data-act="dz" data-op="userec" data-i="${i}">Usar este</button></div></div>`).join('')}</div></div>
+  <div class="sec"><span class="eyebrow">04 · Ajustes finos</span><h3>Hazla <em>tuya</em></h3>
+    <span class="flabel">Estilo de la tarjeta</span>
+    <div data-k="finish">${K.FGROUPS.map(([g, ids]) => `<div class="fgroup"><span class="fglabel">${g}</span><div class="thumbs">${ids.map((v) => `<button type="button" class="thumb-btn${t.finish === v ? ' on' : ''}" data-act="dz" data-op="opt" data-v="${v}"><div class="card f-${v}" style="--a:${t.accent};--a2:${t.a2}"><div class="card-glow"></div></div>${K.FL[v]}</button>`).join('')}</div></div>`).join('')}</div>
+    ${t.palette ? `<span class="flabel">Colores de tu logo</span><div class="swatches">${t.palette.map((c) => `<button type="button" style="background:${c}" data-act="dz" data-op="color" data-c="${c}" aria-label="Usar ${c} como principal"></button>`).join('')}</div>` : ''}
+    <span class="flabel">Color principal</span><div class="swatches" data-c="accent">${K.PRESETS.map((c) => `<button type="button" class="${t.accent === c ? 'on' : ''}" style="background:${c}" data-act="dz" data-op="color" data-c="${c}" aria-label="Color ${c}"></button>`).join('')}<input type="color" id="dzac" value="${t.accent}" aria-label="Otro color principal"></div>
+    <span class="flabel">Color secundario</span><div class="swatches" data-c="a2">${K.PRESETS2.map((c) => `<button type="button" class="${t.a2 === c ? 'on' : ''}" style="background:${c}" data-act="dz" data-op="color2" data-c="${c}" aria-label="Color ${c}"></button>`).join('')}<input type="color" id="dzac2" value="${t.a2}" aria-label="Otro color secundario"></div>
+    <span class="flabel">Tipografía</span>
+    <div class="chips" data-k="font">${K.FONTS.map(([v, l, css]) => `<button type="button" class="chip${t.font === v ? ' on' : ''}" data-act="dz" data-op="opt" data-v="${v}"><span class="aa" style="font-family:${css.replace(/"/g, "'")}">Aa</span>${l}</button>`).join('')}${t.fontFam ? `<button type="button" class="chip${t.font === 'custom' ? ' on' : ''}" data-act="dz" data-op="opt" data-v="custom"><span class="aa" style="font-family:'${t.fontFam}'">Aa</span>Mi tipografía</button>` : ''}</div>
+    <label class="ghost inline" for="upfont" style="align-self:flex-start;cursor:pointer">${ic('upload', 15)} Subir mi tipografía (.ttf, .otf, .woff)<input type="file" id="upfont" accept=".ttf,.otf,.woff,.woff2" hidden></label>
+    <span class="flabel">Forma del sello</span>
+    <div class="chips" data-k="shape">${K.SHAPES.map(([v, l]) => `<button type="button" class="chip${t.shape === v ? ' on' : ''}" data-act="dz" data-op="opt" data-v="${v}">${K.shapeSVG(t, v)}${l}</button>`).join('')}</div>
+    <label class="flabel" for="dzneed">Sellos para ganar el premio: <b style="color:var(--fg)" id="dzneedv">${t.needed}</b></label><input type="range" id="dzneed" min="4" max="15" value="${t.needed}">
+    <label class="flabel" for="dzr">Premio</label><input class="inp" id="dzr" value="${esc(t.reward)}" maxlength="40">
+    <div class="chips">${ideas.map((i) => `<button type="button" class="chip" data-act="dz" data-op="idea" data-v="${esc(i)}">${ic('gift', 14)} ${esc(i)}</button>`).join('')}</div>
+    <label class="flabel" for="dzc">Términos y condiciones del premio <span style="text-transform:none;letter-spacing:0;font-weight:400">(opcional · una por línea)</span></label>
+    <div class="tcwrap"><textarea class="inp" id="dzc" maxlength="240" placeholder="Ej: Válido con compras desde $60&#10;No acumulable con otras promociones">${esc(t.terms || '')}</textarea><span class="tccount" id="dzcc">${(t.terms || '').length}/240</span></div>
+    <div class="chips">${K.TCIDEAS.map((i) => `<button type="button" class="chip" data-act="dz" data-op="tcadd" data-v="${esc(i)}">${ic('plus', 13)} ${esc(i)}${i.endsWith('$') ? '…' : ''}</button>`).join('')}</div>
+    <p class="small" style="margin:-2px 0 4px">El cliente las ve en su tarjeta, al ganar el premio, y el cajero al canjear el código.</p>
+    <span class="flabel">Animación al sellar</span>${chips('anim', K.ANIMS)}</div>
+  <div class="sec"><span class="eyebrow">05 · Resultado final</span><h3>Así se ve <em>tu marca</em></h3>
+    <p>Con todo lo que configuraste, así queda tu marca en cada lugar de Fiel. Desliza para verlos.</p>
+    <div class="uses" id="uses">${dzUses()}</div></div>`;
+}
+function dzUses() {
+  const t = DZ.s, n = dzStamps();
+  const wallet = `<div class="scene">${DZ_BACK.map((b, i) => `<div class="w" style="transform:translate(-50%,-50%) translateY(${-40 + i * 16}px) scale(${0.52 + i * 0.03});filter:brightness(${0.55 + i * 0.2})">${K.cardHTML(b, 3)}</div>`).join('')}<div class="w" style="transform:translate(-50%,-50%) translateY(16px) scale(.6)">${K.cardHTML(t, n)}</div></div>`;
+  let cells = ''; for (let i = 0; i < 8; i++) cells += `<div class="cell${i < 5 ? ' on' : ''}" style="--ui:${K.uiColor(t)}">${i < 5 ? K.shapeSVG(t) : ''}</div>`;
+  const chat = `<div class="scene"><div class="chat"><div class="chat-h">${K.miniLogo(t, 26)}<span>${esc(t.name)}</span></div><div class="chat-b"><div class="bubble">¡Hola Ana! Sumaste 1 sello en ${esc(t.name)}. Llevas ${n} de ${t.needed}. Te falta${t.needed - n > 1 ? 'n' : ''} ${t.needed - n} para: ${esc(t.reward)}.</div></div></div></div>`;
+  const head = `<div class="scene" style="padding:14px;place-items:stretch;align-content:center"><div style="display:flex;gap:10px;align-items:center">${K.miniLogo(t, 40)}<div style="min-width:0"><small style="font-size:10px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase">Panel de</small><b style="display:block;font-size:15px">${esc(t.name)}</b></div></div></div>`;
+  return [['Tarjeta en la cartera', wallet], ['Sellos', `<div class="scene"><div class="cells">${cells}</div></div>`], ['Mensaje de WhatsApp', chat], ['Encabezado de tu panel', head]].map(([l, h]) => `<div class="use">${h}<small>${l}</small></div>`).join('');
+}
+function dzDirty() { if (!DZ) return; DZ.dirty = true; $('#dzsave')?.classList.add('show'); }
+function dzPreview() {
+  const t = DZ.s, pv = $('#pv'); if (!pv) return;
+  pv.innerHTML = K.cardHTML(t, dzStamps());
+  const us = $('#uses'); if (us) { const x = us.scrollLeft; us.innerHTML = dzUses(); us.scrollLeft = x; }
+  document.querySelectorAll('.dz .thumb-btn .card').forEach((c) => { c.style.setProperty('--a', t.accent); c.style.setProperty('--a2', t.a2); });
+  document.querySelectorAll('.dz [data-k="shape"] .chip').forEach((b) => { const v = b.dataset.v; b.innerHTML = K.shapeSVG(t, v) + (K.SHAPES.find((x) => x[0] === v) || [])[1]; });
+}
+function dzChips() {
+  const t = DZ.s;
+  document.querySelectorAll('.dz [data-k]').forEach((g) => { const k = g.dataset.k; g.querySelectorAll('[data-v]').forEach((b) => b.classList.toggle('on', t[k] === b.dataset.v)); });
+  document.querySelectorAll('.dz [data-c="accent"] [data-c]').forEach((b) => b.classList.toggle('on', b.dataset.c === t.accent));
+  document.querySelectorAll('.dz [data-c="a2"] [data-c]').forEach((b) => b.classList.toggle('on', b.dataset.c === t.a2));
+  const a = $('#dzac'), b = $('#dzac2'); if (a) a.value = t.accent; if (b) b.value = t.a2;
+}
+function dzRedraw() { const el = $('#dz'); if (!el) return; const y = window.scrollY; el.innerHTML = dzHTML(); window.scrollTo(0, y); }
+async function dzSetLogo(kind, src) {
+  toast('Procesando tu logo…');
+  const r = await K.processLogo(src); if (!r) { toast('No pudimos leer esa imagen. Prueba con otra.'); return; }
+  const t = DZ.s;
+  t[kind] = r.png; t[kind + 'M'] = r.mono; t['bg_' + kind] = false;
+  t['m_' + kind] = { ratio: r.ratio, rawRatio: r.rawRatio, removed: r.removed, hadAlpha: r.hadAlpha, png: r.png, mono: r.mono, raw: r.raw };
+  if (kind === 'iso' && r.ratio > 1.7 && !t.wordm) { t.wordm = r.png; t.wordmM = r.mono; t.m_wordm = t.m_iso; }
+  if (r.palette.length) { t.palette = r.palette; t.accent = r.palette[0]; t.a2 = r.palette[1] || K.mix(t.accent, '#ffffff', 0.45); }
+  const darkCard = K.inkFor(t) === '#ffffff' || K.lum(K.inkFor(t)) > 0.6;
+  t.lowContrast = darkCard ? r.darkFrac > 0.12 : r.lightFrac > 0.3; t.logoColor = t.lowContrast ? 'ink' : 'original';
+  await K.buildPattern(t); dzDirty(); dzRedraw();
+  toast(t.lowContrast ? (darkCard ? 'Tu logo es oscuro: lo mostramos claro para que se lea en tu tarjeta' : 'Tu logo es claro: lo mostramos oscuro para que se lea en tu tarjeta') : r.hadAlpha ? 'Listo: tu PNG sin fondo quedó perfecto' : r.removed ? 'Listo: le quitamos el fondo. Revisa que se vea completo' : 'Listo: logo recortado');
+}
+async function dzUpload(id, data, name, type = 'image/png') {
+  const blob = data instanceof Blob ? data : await (await fetch(data)).blob();
+  const ext = type === 'image/png' ? 'png' : name.split('.').pop();
+  const path = `${id}/${name.replace(/\.[^.]+$/, '')}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
+  await api(`/storage/v1/object/logos/${path}`, { method: 'POST', body: blob, headers: { 'Content-Type': type, 'x-upsert': 'true' } });
+  return `${C.supabaseUrl}/storage/v1/object/public/logos/${path}`;
+}
+async function dzSave() {
+  const id = DZ.id, t = DZ.s, b = $('#dzbtn'); if (b) { b.disabled = true; b.textContent = 'Guardando…'; }
+  try {
+    const cache = new Map();
+    const up = (v, name) => { if (typeof v !== 'string' || !v.startsWith('data:')) return v; if (!cache.has(v)) cache.set(v, dzUpload(id, v, name)); return cache.get(v); };
+    // Sube todas las imágenes nuevas a la vez
+    const pend = []; const q = (v, n) => { const r = up(v, n); if (r instanceof Promise) pend.push(r); };
+    [t.m_iso, t.m_wordm].forEach((m, i) => { if (m) { const k = i ? 'logotipo' : 'isotipo'; q(m.png, k); q(m.mono, k + '-mono'); if (m.raw) q(m.raw, k + '-original'); } });
+    q(t.iso, 'isotipo'); q(t.isoM, 'isotipo-mono'); q(t.wordm, 'logotipo'); q(t.wordmM, 'logotipo-mono'); if (t.pat) { q(t.pat.o, 'patron'); q(t.pat.m, 'patron-mono'); }
+    if (pend.length && b) b.textContent = 'Subiendo tu logo…';
+    await Promise.all(pend);
+    const meta = async (m, k) => m ? { ratio: m.ratio, rawRatio: m.rawRatio, ratioOrig: m.ratioOrig, removed: !!m.removed, hadAlpha: !!m.hadAlpha, png: await up(m.png, k), mono: await up(m.mono, k + '-mono'), raw: m.raw ? await up(m.raw, k + '-original') : null } : null;
+    if (b) b.textContent = 'Guardando…';
+    const design = {
+      finish: t.finish, accent: t.accent, a2: t.a2, font: t.font, shape: t.shape, logoMode: t.logoMode, logoColor: t.logoColor, anim: t.anim, personality: t.personality,
+      palette: t.palette || null, lowContrast: !!t.lowContrast, bg_iso: !!t.bg_iso, bg_wordm: !!t.bg_wordm,
+      m_iso: await meta(t.m_iso, 'isotipo'), m_wordm: await meta(t.m_wordm, 'logotipo'),
+      iso: await up(t.iso, 'isotipo'), isoM: await up(t.isoM, 'isotipo-mono'), wordm: await up(t.wordm, 'logotipo'), wordmM: await up(t.wordmM, 'logotipo-mono'),
+      pat: t.pat ? { o: await up(t.pat.o, 'patron'), m: await up(t.pat.m, 'patron-mono'), w: t.pat.w, h: t.pat.h } : null,
+      fontFam: t.fontFam || null, fontUrl: t.fontUrl || null,
+    };
+    if (DZ.font) { const f = DZ.font, ext = f.name.split('.').pop().toLowerCase(); design.fontUrl = await dzUpload(id, f, 'tipografia.' + ext, { ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2' }[ext] || 'font/ttf'); DZ.font = null; t.fontUrl = design.fontUrl; }
+    const name = (t.name || '').trim(), type = (t.type || '').trim(), reward = (t.reward || '').trim();
+    if (name.length < 2) throw new Error('Escribe el nombre del negocio.');
+    if (!reward) throw new Error('Escribe el premio.');
+    await db.update('stores', `id=eq.${id}`, { design, name, business_type: type, reward, needed: t.needed, terms: (t.terms || '').trim() });
+    DZ = null; delete storeCache[id]; toast('Diseño guardado. Tus clientes ya lo ven.'); route();
+  } catch (e) { toast(e.message || 'No se pudo guardar.'); if (b) { b.disabled = false; b.textContent = 'Guardar'; } }
+}
+async function dzAct(a) {
+  const t = DZ?.s; if (!t) return; const op = a.dataset.op;
+  switch (op) {
+    case 'pers': t.personality = a.dataset.v; dzDirty(); dzRedraw(); break;
+    case 'opt': { const k = a.closest('[data-k]').dataset.k; t[k] = a.dataset.v; dzDirty(); dzPreview(); dzChips(); break; }
+    case 'color': t.accent = a.dataset.c; dzDirty(); dzPreview(); dzChips(); break;
+    case 'color2': t.a2 = a.dataset.c; dzDirty(); dzPreview(); dzChips(); break;
+    case 'userec': { const r = K.recsFor(t)[+a.dataset.i]; ['finish', 'font', 'logoMode', 'anim', 'accent', 'a2', 'logoColor'].forEach((k) => (t[k] = r[k])); dzDirty(); dzRedraw(); window.scrollTo({ top: 0, behavior: 'smooth' }); toast(`Diseño "${r.n}" aplicado`); break; }
+    case 'idea': t.reward = a.dataset.v; $('#dzr').value = t.reward; dzDirty(); dzPreview(); break;
+    case 'tcadd': { const v = a.dataset.v, ta = $('#dzc'), cur = (t.terms || '').trim(); if (cur.split('\n').includes(v)) { toast('Esa condición ya está'); break; } t.terms = ((cur ? cur + '\n' : '') + v).slice(0, 240); ta.value = t.terms; $('#dzcc').textContent = t.terms.length + '/240'; ta.focus(); if (v.endsWith('$')) ta.setSelectionRange(t.terms.length, t.terms.length); dzDirty(); dzPreview(); break; }
+    case 'test': { const card = $('#pv .card'), dot = card?.querySelectorAll('.dots i')[dzStamps()]; if (dot) { dot.classList.add('on'); setTimeout(() => dot.classList.remove('on'), 1600); } K.effect(t, $('#pvh'), dot || card, card); break; }
+    case 'bgtoggle': { const k = a.dataset.k, m = t['m_' + k]; if (!m || !m.raw) break; const on = !t['bg_' + k]; t['bg_' + k] = on; t[k] = on ? m.raw : m.png; t[k + 'M'] = on ? m.raw : m.mono; if (!m.ratioOrig) m.ratioOrig = m.ratio; m.ratio = on ? m.rawRatio : m.ratioOrig;
+      if (k === 'iso' && t.m_wordm === m) { t.wordm = t.iso; t.wordmM = t.isoM; } await K.buildPattern(t); dzDirty(); dzRedraw(); toast(on ? 'Usando tu logo con su fondo original' : 'Fondo quitado de nuevo'); break; }
+    case 'rmlogo': { const k = a.dataset.k; t[k] = null; t[k + 'M'] = null; t['m_' + k] = null; t['bg_' + k] = false; if (!t.iso && !t.wordm) { t.palette = null; t.lowContrast = false; t.logoColor = 'original'; } await K.buildPattern(t); dzDirty(); dzRedraw(); break; }
+    case 'discard': DZ = null; route(); break;
+    case 'save': dzSave(); break;
+  }
+}
+function dzInput(el) {
+  const t = DZ?.s; if (!t) return false;
+  const id = el.id;
+  if (id === 'dzn') t.name = el.value; else if (id === 'dzt') t.type = el.value; else if (id === 'dzr') t.reward = el.value;
+  else if (id === 'dzc') { t.terms = el.value; $('#dzcc').textContent = el.value.length + '/240'; }
+  else if (id === 'dzneed') { t.needed = +el.value; $('#dzneedv').textContent = t.needed; }
+  else if (id === 'dzac') { t.accent = el.value; dzChips(); } else if (id === 'dzac2') { t.a2 = el.value; dzChips(); }
+  else return false;
+  dzDirty(); dzPreview(); return true;
+}
+async function dzFile(el) {
+  const f = el.files[0]; if (!f || !DZ) return;
+  if (el.id === 'up-iso' || el.id === 'up-wordm') {
+    if (f.size > 8 * 1024 * 1024) { toast('El archivo es muy pesado (máximo 8 MB).'); return; }
+    const r = new FileReader(); r.onload = () => dzSetLogo(el.id === 'up-iso' ? 'iso' : 'wordm', r.result); r.readAsDataURL(f);
+  } else if (el.id === 'upfont') {
+    if (f.size > 2 * 1024 * 1024) { toast('La tipografía pesa mucho (máximo 2 MB).'); return; }
+    try { const fam = 'MarcaFont' + Date.now(); const ff = new FontFace(fam, await f.arrayBuffer()); await ff.load(); document.fonts.add(ff);
+      DZ.font = f; DZ.s.fontFam = fam; DZ.s.fontUrl = null; DZ.s.font = 'custom'; dzDirty(); dzRedraw(); toast('Tu tipografía ya está en la tarjeta'); }
+    catch { toast('No pudimos leer ese archivo de fuente'); }
+  }
 }
 
 /* ---------- Admin ---------- */
@@ -800,6 +905,7 @@ document.addEventListener('click', async (e) => {
     case 'reload': location.reload(); break;
     case 'legal': openSheet(LEGAL); break;
     case 'install': installSheet(); break;
+    case 'dz': await dzAct(a); break;
     case 'logout':
       if (bioInfo()) openSheet(`<div class="bigicon">${ic('out', 26)}</div><h2>¿Cerrar sesión?</h2><p>Puedes volver a entrar con ${BIO}. Si este teléfono no es tuyo o lo vas a prestar, quita también ${BIO}.</p><div class="btns"><button class="primary" data-act="logout1">Cerrar sesión</button><button class="ghost" data-act="logout2">Cerrar y quitar ${BIO}</button><button class="linkbtn" data-close>Cancelar</button></div>`);
       else signOut();
@@ -841,8 +947,6 @@ document.addEventListener('click', async (e) => {
     case 'deliver': try { await db.rpc('deliver_reward', { p_store: a.dataset.id, p_code: a.dataset.code }); closeSheet(); toast('Premio entregado'); route(); } catch (err) { toast(err.message); } break;
     case 'showqr': MT = 'qr'; location.hash = `#/tienda/${a.dataset.id}/tienda`; route(); break;
     case 'mt': MT = a.dataset.v; route(); break;
-    case 'dset': { const st = storeCache[hid].st; st.design = { ...(st.design || {}), [a.dataset.k]: a.dataset.v }; a.parentElement.querySelectorAll('button').forEach((c) => c.classList.toggle('on', c === a)); livePreview(hid); break; }
-    case 'dneed': { const st = storeCache[hid].st; st.needed = +a.dataset.v; a.parentElement.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c === a)); livePreview(hid); break; }
     case 'copy': try { await navigator.clipboard.writeText(a.dataset.v); toast('Enlace copiado'); } catch { toast(a.dataset.v); } break;
     case 'rmmember': if (!confirmOnce(a, 'Toca otra vez para quitar el acceso')) break; try { await db.update('store_members', `store_id=eq.${hid}&user_id=eq.${a.dataset.u}`, { active: false }); toast('Acceso quitado'); delete storeCache[hid]; route(); } catch (err) { toast(err.message); } break;
     case 'verify': {
@@ -870,7 +974,6 @@ document.addEventListener('submit', async (e) => {
   else if (id === 'nsf') submitNewStore();
   else if (id === 'sf') submitStamp(hid);
   else if (id === 'cf') submitCode(hid);
-  else if (id === 'dsf') saveDesign(hid);
   else if (id === 'mf') {
     const ced = readCed('mc'), role = $('#mrole .chip.on').dataset.v, er = $('#merr'); er.textContent = '';
     if (!ced) { er.textContent = 'Escribe la cédula.'; return; }
@@ -895,16 +998,10 @@ document.addEventListener('submit', async (e) => {
     try { await db.update('app_config', 'id=eq.1', patch); cfgCache = null; if (auto) await db.rpc('admin_refresh_bcv').catch(() => {}); toast('Ajustes guardados'); route(); } catch (err) { $('#cferr').textContent = err.message; }
   }
 });
-document.addEventListener('input', (e) => { const hid = (location.hash.match(/tienda\/([0-9a-f-]{36})/) || [])[1]; if (['dname', 'dtype', 'drw', 'dterms'].includes(e.target.id)) livePreview(hid); });
+document.addEventListener('input', (e) => { dzInput(e.target); });
 document.addEventListener('change', async (e) => {
   if (e.target.id === 'cfa') { const w = $('#cfrw'); if (w) w.hidden = e.target.checked; return; }
-  if (e.target.id !== 'lgf') return; const f = e.target.files[0]; if (!f) return;
-  if (f.size > 8 * 1024 * 1024) { toast('El archivo es muy pesado (máximo 8 MB).'); return; }
-  toast('Procesando tu logo…'); const r = await processLogo(f);
-  if (!r) { toast('No pudimos leer esa imagen. Prueba con un PNG.'); return; }
-  pendingLogo = r.blob; const hid = (location.hash.match(/tienda\/([0-9a-f-]{36})/) || [])[1];
-  $('#lgp').innerHTML = `<img src="${r.preview}" alt="">`; storeCache[hid].st.design = { ...(storeCache[hid].st.design || {}), logo: r.preview }; livePreview(hid);
-  toast(r.hasAlpha ? 'Tu PNG transparente quedó perfecto. Toca Guardar.' : r.removed ? 'Le quitamos el fondo. Revisa que se vea completo y toca Guardar.' : 'Logo listo. Toca Guardar.');
+  if (['up-iso', 'up-wordm', 'upfont'].includes(e.target.id)) { await dzFile(e.target); e.target.value = ''; }
 });
 
 if (bioInfo() && session) { let u = null; try { u = sessionStorage.getItem('fiel.unlocked'); } catch {} if (!u) { const h = location.hash; bioLock(); if (h && !/^#\/(entrar|registro)?$/.test(h)) sessionStorage.setItem('fiel.next', h); location.hash = '#/entrar'; } }
