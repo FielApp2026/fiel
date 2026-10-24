@@ -81,7 +81,7 @@ async function api(path, { method = 'GET', body, headers = {}, single = false, r
   if (body !== undefined && !(body instanceof Blob)) h['Content-Type'] = 'application/json';
   if (single) h.Accept = 'application/vnd.pgrst.object+json';
   let r;
-  try { r = await fetch(C.supabaseUrl + path, { method, headers: h, body: body === undefined ? undefined : body instanceof Blob ? body : JSON.stringify(body) }); }
+  try { r = await fetch(C.supabaseUrl + path, { method, headers: h, cache: 'no-store', body: body === undefined ? undefined : body instanceof Blob ? body : JSON.stringify(body) }); }
   catch { throw new NetErr('Sin conexión. Revisa tu internet.'); }
   if (raw) return r;
   const txt = await r.text();
@@ -384,11 +384,11 @@ on(/^\/perfil$/, async () => {
   const ROLE = { dueno: 'Dueño', encargado: 'Encargado', cajero: 'Cajero', mesonero: 'Mesonero', personalizado: 'Equipo' };
   app.innerHTML = `<h1>Perfil</h1>
     <div class="glass pad" style="display:flex;gap:14px;align-items:center"><div class="av" style="width:56px;height:56px;font-size:18px">${initials(u.full_name)}</div><div class="rt"><b style="font-size:18px">${esc(u.full_name)}</b><small>${fmtCed(u.cedula)} · ${fmtPhone(u.phone)}</small></div></div>
+    ${u.is_admin ? `<div class="section"><span class="eyebrow">Administración</span><div class="list"><a class="row" href="#/admin/tiendas"><div class="av">${ic('shield')}</div><div class="rt"><b>Panel de administración</b><small>Tiendas, pagos y configuración</small></div>${ic('shield')}</a></div></div>` : ''}
     <div class="section"><span class="eyebrow">Mi negocio</span><div class="list">
       ${stores.map((s) => `<a class="row" href="#/tienda/${s.id}/sellar"><div class="av">${initials(s.name)}</div><div class="rt"><b>${esc(s.name)}${s.verify_status === 'verificada' ? '<span class="tag ok">Verificada</span>' : ''}</b><small>${ROLE[s.role] || s.role} · ${s.status === 'prueba' ? 'En prueba gratis' : s.status}</small></div>${ic('store')}</a>`).join('')}
       <a class="row" href="#/nueva-tienda"><div class="av">${ic('plus')}</div><div class="rt"><b>${stores.length ? 'Registrar otro negocio' : '¿Tienes un negocio?'}</b><small>Crea tu tarjeta de fidelidad. 14 días gratis.</small></div></a>
     </div></div>
-    ${u.is_admin ? `<div class="section"><a class="row" href="#/admin/tiendas"><div class="av">${ic('shield')}</div><div class="rt"><b>Panel de administración</b><small>Tiendas, pagos y configuración</small></div></a></div>` : ''}
     <div class="section"><span class="eyebrow">Ayuda</span><div class="list">
       <button class="row" data-act="install"><div class="av">${ic('upload')}</div><div class="rt"><b>Agregar a la pantalla de inicio</b><small>Abre Fiel con un toque, como una app</small></div></button>
       <a class="row" href="${waLink(C.support, `Hola, soy ${u.full_name}. Necesito ayuda con Fiel.`)}" target="_blank" rel="noopener"><div class="av">${ic('msg')}</div><div class="rt"><b>Escribir a soporte</b><small>Por WhatsApp</small></div></a>
